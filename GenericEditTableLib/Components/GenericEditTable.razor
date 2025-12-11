@@ -1,0 +1,188 @@
+@typeparam TItem where TItem : class
+@using System.Reflection
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using GenericEditTableLib.Models
+
+<div class="generic-table-container">
+    @if (!string.IsNullOrEmpty(ErrorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <strong>Error:</strong> @ErrorMessage
+            <button type="button" class="btn-close" @onclick="ClearError"></button>
+        </div>
+    }
+
+    @if (IsEditMode && SelectedItem != null && FormWrapper != null)
+    {
+        <EditForm Model="@FormWrapper" OnValidSubmit="SaveItem">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="alert alert-warning" />
+            
+            <table class="table table-striped table-bordered">
+                <thead class="table-dark">
+                    <tr>
+                        @foreach (var col in Columns)
+                        {
+                            <th>@col.DisplayName @if (col.IsEditable) { <span class="badge bg-danger">Required</span> }</th>
+                        }
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="table-info">
+                        @foreach (var col in Columns)
+                        {
+                            <td>
+                                @if (col.IsEditable)
+                                {
+                                    @if (col.PropertyType == typeof(string))
+                                    {
+                                        <InputText @bind-Value="@GetPropertyValue<string>(SelectedItem, col.PropertyName)" class="form-control" />
+                                    }
+                                    else if (col.PropertyType == typeof(int) || col.PropertyType == typeof(int?))
+                                    {
+                                        <InputNumber @bind-Value="@GetPropertyValue<int?>(SelectedItem, col.PropertyName)" class="form-control" />
+                                    }
+                                    else if (col.PropertyType == typeof(decimal) || col.PropertyType == typeof(decimal?))
+                                    {
+                                        <InputNumber @bind-Value="@GetPropertyValue<decimal?>(SelectedItem, col.PropertyName)" class="form-control" />
+                                    }
+                                    else if (col.PropertyType == typeof(DateTime) || col.PropertyType == typeof(DateTime?))
+                                    {
+                                        <InputDate @bind-Value="@GetPropertyValue<DateTime?>(SelectedItem, col.PropertyName)" class="form-control" />
+                                    }
+                                }
+                                else
+                                {
+                                    <strong>@GetPropertyDisplayValue(SelectedItem, col.PropertyName)</strong>
+                                }
+                            </td>
+                        }
+                        <td>
+                            <button type="submit" class="btn btn-success btn-sm" disabled="@IsSaving">
+                                @if (IsSaving) { <span>Saving...</span> } else { <span>Save</span> }
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm ms-2" @onclick="CancelEdit" disabled="@IsSaving">Cancel</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </EditForm>
+    }
+    else
+    {
+        <table class="table table-striped table-hover table-bordered">
+            <thead class="table-dark">
+                <tr>
+                    @foreach (var col in Columns)
+                    {
+                        <th>@col.DisplayName</th>
+                    }
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Items.Count == 0)
+                {
+                    <tr><td colspan="@(Columns.Count + 1)" class="text-center text-muted">No data</td></tr>
+                }
+                @foreach (var item in Items)
+                {
+                    <tr>
+                        @foreach (var col in Columns)
+                        {
+                            <td>@GetPropertyDisplayValue(item, col.PropertyName)</td>
+                        }
+                        <td><button class="btn btn-primary btn-sm" @onclick="() => EditItem(item)">Edit</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    [Parameter] public List<TItem> Items { get; set; } = new();
+    [Parameter] public List<ColumnConfig> Columns { get; set; } = new();
+    [Parameter] public Func<TItem, Task<bool>> SaveAsync { get; set; } = default!;
+    [Parameter] public Func<Task> LoadDataAsync { get; set; } = default!;
+
+    private EditableItemWrapper<TItem>? FormWrapper;
+    private TItem? SelectedItem;
+    private bool IsEditMode;
+    private bool IsSaving;
+    private string ErrorMessage = string.Empty;
+
+    private void EditItem(TItem item)
+    {
+        SelectedItem = CloneObject(item);
+        FormWrapper = new EditableItemWrapper<TItem>(SelectedItem, Columns);
+        IsEditMode = true;
+        ClearError();
+    }
+
+    private void CancelEdit()
+    {
+        IsEditMode = false;
+        SelectedItem = default;
+        FormWrapper = default;
+    }
+
+    private void ClearError()
+    {
+        ErrorMessage = string.Empty;
+        StateHasChanged();
+    }
+
+    private async Task SaveItem()
+    {
+        if (SelectedItem == null) return;
+        IsSaving = true;
+        ErrorMessage = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            bool success = await SaveAsync.Invoke(SelectedItem);
+            if (success)
+            {
+                if (LoadDataAsync != null) await LoadDataAsync();
+                IsEditMode = false;
+                SelectedItem = default;
+                FormWrapper = default;
+            }
+            else
+            {
+                ErrorMessage = "Failed to save";
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private T? GetPropertyValue<T>(TItem? item, string name)
+    {
+        if (item == null) return default;
+        var prop = typeof(TItem).GetProperty(name);
+        try { return (T?)Convert.ChangeType(prop?.GetValue(item), typeof(T)); }
+        catch { return (T?)(object?)prop?.GetValue(item); }
+    }
+
+    private string GetPropertyDisplayValue(TItem? item, string name)
+    {
+        var value = GetPropertyValue(item, name);
+        if (value == null) return "-";
+        if (value is DateTime dt) return dt.ToString("dd/MM/yyyy");
+        return value.ToString() ?? "-";
+    }
+
+    private TItem CloneObject(TItem source) => JsonSerializer.Deserialize<TItem>(JsonSerializer.Serialize(source)) ?? source;
+}
